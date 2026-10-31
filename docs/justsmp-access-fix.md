@@ -14,7 +14,8 @@ already handed out:
   so the socket stayed authed and a reconnect reused the cached passport.
 - **Terminal, proxy mode.** The panel's `TerminalBridge` never rechecked the user, and gateway
   tokens carried no user identity, so nothing could be matched to a user.
-- **File links.** Download and upload passports live one hour with no user check.
+- **File links.** Download and upload passports live one hour with no user check, and a chunked
+  upload carries on by writer id alone.
 - **Sessions.** Cookie-only (koa-session, no server-side list). An admin password reset could
   not end the user's other sessions.
 
@@ -27,10 +28,15 @@ Daemon
 
 - `passport/register` takes an optional `userUuid` and stores it on the passport.
 - `stream/auth` records the passport's user on the authed socket (a registry in
-  `service/mission_passport.ts`; a socket that auths twice keeps both grants).
+  `service/mission_passport.ts`; a socket that auths twice keeps both grants, and repeating the
+  same grant adds nothing).
+- `/upload-new` tags the `FileWriter` with the passport's user and instance. A writer that is
+  found again by path is reused only for the same user tag, otherwise it is replaced, so an id is
+  never handed to someone else.
 - New route `passport/revoke_user` `{ userUuid, instanceUuids? }`. It deletes the user's
-  passports and closes their authed stream sockets, and answers `{ sockets, passports }`.
-  Without `instanceUuids` it covers every instance; an empty list does nothing.
+  passports, closes their authed stream sockets and drops their upload writers (the half-written
+  file is removed), and answers `{ sockets, passports, uploads }`. Without `instanceUuids` it
+  covers every instance; an empty list does nothing. Writers with no user tag are never touched.
 - Sockets are cut with `socket.conn.close()`, not `socket.disconnect()`. socket.io clients do
   not reconnect after a server `disconnect()`, so the web terminal would sit on its loading
   spinner forever. After a transport close it reconnects, fails `stream/auth` and shows its
@@ -46,8 +52,9 @@ Panel
 
 - `service/access_revoke_service.ts`: `computeAccessLoss(before, after)` (pure),
   `revokeUserAccess(userUuid, { instanceUuids? })` and `revokeOnAccessChange`.
-  `revokeUserAccess` drops the user's gateway tokens, closes their proxy-mode terminal sockets,
-  and sends `passport/revoke_user` to every daemon with a 3 s timeout. An unreachable daemon, or
+  `revokeUserAccess` drops the user's gateway tokens and proxy-mode upload writer ids
+  (`uploadIdMap` carries the user), closes their proxy-mode terminal sockets, and sends
+  `passport/revoke_user` to every daemon with a 3 s timeout. An unreachable daemon, or
   one too old to know the route (the request times out; this protocol has no 404), is logged
   and skipped. Nothing rejects, and the callers do not wait for it.
 - Called from `DELETE /auth` (user delete, batch), `PUT /auth` (permission, instances, password).
@@ -60,11 +67,16 @@ Panel
   simply cannot be revoked.
 - Password reset: `User.sessionVersion` (default 0) is bumped by `PUT /auth` with `passWord`
   (`userSystem.endSessions`). Login stores the user's value in the session and `permission.ts`
-  rejects a session whose value differs (logout + 403). Users and sessions without the field
-  count as 0, so nobody is logged out by the upgrade.
-- `TerminalBridge` tracks each verified browser socket with its user and instance, from token
-  check on, so a revoke that lands while the daemon client is still being set up still finds
-  it. A socket closed during setup is not subscribed.
+  rejects a session whose value differs (logout + 403). `check()`, which `/auth/login` asks
+  before logging anyone in, applies the same rule and also needs the user to exist, so an old
+  cookie plus the new password starts a new session instead of answering "Logined". Users and
+  sessions without the field count as 0, so nobody is logged out by the upgrade. The reset runs
+  `revokeUserAccess` even when the store write in `endSessions` fails; the admin still gets the
+  error.
+- `TerminalBridge` tracks each verified browser socket with every (user, instance) it authed
+  with, from token check on, so a revoke that lands while the daemon client is still being set up
+  still finds it, and a socket that authed on two instances is cut when either is revoked. A
+  socket closed during setup is not subscribed.
 - `getMission` already ignores consumed (`isDeleted`) passports at v10.22.0, so no change there;
   a test pins it.
 
@@ -83,12 +95,20 @@ Frontend: unchanged.
 
 ## Tests
 
-- `daemon/test/access_revoke.test.ts`: passport matching, stream-socket matching, `stream/auth`
-  user recording, the route gate (key session allowed; stream session, no session and wrong
-  key refused; bad arguments never fall back to "revoke everyone").
+- `daemon/test/access_revoke.test.ts`: passport matching, stream-socket matching (including
+  repeated `stream/auth` on one socket), `stream/auth` user recording, the route gate (key
+  session allowed; stream session, no session and wrong key refused; bad arguments never fall
+  back to "revoke everyone").
+- `daemon/test/upload_revoke.test.ts`: the real upload routes and `FileWriter` on a temp folder.
+  A piece after the revoke is refused and the file is not finished; instance filter; other
+  users' and untagged writers survive; a writer id is not handed to another user.
 - `panel/src/app/service/__test__/access_revoke_service.test.ts`: the compare logic and what
   `revokeUserAccess` sends, including a failing daemon.
-- `panel/src/__test__/gateway_token_revoke.test.ts`, `.../terminal_bridge_revoke.test.ts`,
+- `panel/src/app/service/__test__/proxy_upload_revoke.test.ts`: proxy-mode `/upload-piece` against
+  a loopback daemon, before and after a revoke.
+- `panel/src/app/service/__test__/terminal_bridge_revoke.test.ts` (including a socket that authed
+  twice), `.../passport_check.test.ts`, `panel/src/app/routers/__test__/user_overview_router.revoke.test.ts`
+  (password reset with a failing `endSessions`), `panel/src/__test__/gateway_token_revoke.test.ts`,
   `panel/src/app/middleware/__test__/permission.session_version.test.ts`.
 - `scripts/test-revoke.mjs`: end to end. Starts the built daemon and panel on spare loopback
   ports with temporary folders (never 23333 or 24444), installs an admin, adds the daemon,
@@ -98,9 +118,12 @@ Frontend: unchanged.
   script drops empty stubs in its temporary folder (nothing is downloaded or executed; no
   instance is started).
 
-  Result: 96/96 checks pass (48 per mode). Run against the unpatched v10.22.0 build, 37 of the
-  96 fail: every socket-drop, file-link and password-reset check, the daemon-route checks, and
-  in direct mode the passport re-auth checks. The HTTP-refusal checks already pass on the
+  Result: 118/118 checks pass (59 per mode). Run against the unpatched v10.22.0 build, 37 of the
+  original 96 failed: every socket-drop, file-link and password-reset check, the daemon-route
+  checks, and in direct mode the passport re-auth checks. The added chunked-upload case (a piece
+  POSTed after a ban is refused, the half-written file is removed, another user's upload still
+  completes) and the stale-cookie login (old cookie plus the new password gets a new session)
+  fail on a build without those two fixes, 4 checks per mode. The HTTP-refusal checks already pass on the
   unpatched build (the bug was never there), and in proxy mode the re-auth check also passes
   there because a claimed gateway token cannot be used twice anyway.
 
@@ -113,11 +136,8 @@ Frontend: unchanged.
 
 ## Not closed
 
-- **Chunked uploads in flight.** `upload-new` consumes the passport and hands back a writer id;
-  `upload-piece/:id` then needs only that id. A user mid-upload can finish that file after being
-  cut off (writers expire after an hour idle). Closing it means tagging `FileWriter` and
-  dropping the user's writers in `revoke_user`.
-- Downloads and uploads that are already streaming run to the end.
+- Downloads and uploads that are already streaming run to the end. A chunked upload loses every
+  piece after the one in flight.
 - **API keys** survive a password reset (they are not sessions).
 - A user changing their own password (`PUT /auth/update`) still only logs out the current
   session. The same `endSessions` call would end the rest.

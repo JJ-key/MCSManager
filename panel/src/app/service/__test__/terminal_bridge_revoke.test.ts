@@ -40,8 +40,8 @@ function fakeBrowserSocket() {
   return socket;
 }
 
-// Connect a browser socket with a stream token and run stream/auth.
-function connect(instanceUuid: string, userUuid?: string) {
+// Run stream/auth on an already bound browser socket with a fresh stream token.
+function auth(socket: any, instanceUuid: string, userUuid?: string) {
   const token = issueProxyToken({
     daemonId: "d1",
     instanceUuid,
@@ -49,9 +49,14 @@ function connect(instanceUuid: string, userUuid?: string) {
     target: instanceUuid,
     userUuid
   });
+  EventEmitter.prototype.emit.call(socket, "stream/auth", { data: { password: token } });
+}
+
+// Connect a browser socket with a stream token and run stream/auth.
+function connect(instanceUuid: string, userUuid?: string) {
   const socket = fakeBrowserSocket();
   TerminalBridge.bindBrowserConnection(socket);
-  EventEmitter.prototype.emit.call(socket, "stream/auth", { data: { password: token } });
+  auth(socket, instanceUuid, userUuid);
   return socket;
 }
 
@@ -104,6 +109,55 @@ describe("closeUserStreams", () => {
     });
     expect(closeUserStreams("user-a")).toBe(1);
     expect(a.disconnect).toHaveBeenCalledWith(true);
+  });
+
+  it("finds a socket that authed twice, whichever instance is revoked", () => {
+    // Tokens for X and Y on one socket: the second auth must not hide the first.
+    const x = fakeBrowserSocket();
+    TerminalBridge.bindBrowserConnection(x);
+    auth(x, "inst-x", "user-a");
+    auth(x, "inst-y", "user-a");
+    expect(closeUserStreams("user-a", ["inst-x"])).toBe(1);
+    expect(x.conn.close).toHaveBeenCalled();
+
+    const y = fakeBrowserSocket();
+    TerminalBridge.bindBrowserConnection(y);
+    auth(y, "inst-x", "user-a");
+    auth(y, "inst-y", "user-a");
+    expect(closeUserStreams("user-a", ["inst-y"])).toBe(1);
+    expect(y.conn.close).toHaveBeenCalled();
+  });
+
+  it("closes a twice-authed socket once, and leaves it alone for other instances", () => {
+    const s = fakeBrowserSocket();
+    TerminalBridge.bindBrowserConnection(s);
+    auth(s, "inst-x", "user-a");
+    auth(s, "inst-y", "user-a");
+    auth(s, "inst-y", "user-a");
+    expect(closeUserStreams("user-a", ["inst-z"])).toBe(0);
+    expect(s.conn.close).not.toHaveBeenCalled();
+    // Both grants match a full revoke, but the socket is closed (and counted) once.
+    expect(closeUserStreams("user-a")).toBe(1);
+    expect(s.conn.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches a revoke on any grant of a socket that mixes users", () => {
+    const s = fakeBrowserSocket();
+    TerminalBridge.bindBrowserConnection(s);
+    auth(s, "inst-x", "user-a");
+    auth(s, "inst-y", "user-b");
+    expect(closeUserStreams("user-a", ["inst-y"])).toBe(0);
+    expect(closeUserStreams("user-a", ["inst-x"])).toBe(1);
+    expect(s.conn.close).toHaveBeenCalled();
+  });
+
+  it("forgets a twice-authed socket once it disconnects", () => {
+    const s = fakeBrowserSocket();
+    TerminalBridge.bindBrowserConnection(s);
+    auth(s, "inst-x", "user-a");
+    auth(s, "inst-y", "user-a");
+    s.disconnect();
+    expect(closeUserStreams("user-a")).toBe(0);
   });
 
   it("rejects a socket with a bad token without tracking it", () => {

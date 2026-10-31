@@ -50,10 +50,11 @@ interface StreamClientEntry {
 // Map keyed by `${daemonId}::${instanceUuid}`.
 const streamClientMap = new Map<string, StreamClientEntry>();
 
-// Browser sockets that passed token verification, with the user and instance
-// their token was issued for. Set before the daemon client is attached, so a
-// revoke that lands mid-attach still finds the socket.
-const browserSockets = new Map<ServerSocket, { userUuid?: string; instanceUuid: string }>();
+// Browser sockets that passed token verification, with every (user, instance) their
+// tokens were issued for: a socket can run stream/auth more than once and each attach
+// subscribes it, so it keeps all its grants. Set before the daemon client is attached,
+// so a revoke that lands mid-attach still finds the socket.
+const browserSockets = new Map<ServerSocket, Array<{ userUuid?: string; instanceUuid: string }>>();
 
 // Daemon-side events that must be fanned out to all browser subscribers.
 const DAEMON_FORWARD_EVENTS = [
@@ -92,11 +93,19 @@ class TerminalBridgeImpl {
         return;
       }
 
-      browserSockets.set(socket, {
-        userUuid: binding.userUuid,
-        instanceUuid: binding.instanceUuid
-      });
-      socket.on("disconnect", () => browserSockets.delete(socket));
+      let grants = browserSockets.get(socket);
+      if (!grants) {
+        grants = [];
+        browserSockets.set(socket, grants);
+        socket.on("disconnect", () => browserSockets.delete(socket));
+      }
+      if (
+        !grants.some(
+          (g) => g.userUuid === binding.userUuid && g.instanceUuid === binding.instanceUuid
+        )
+      ) {
+        grants.push({ userUuid: binding.userUuid, instanceUuid: binding.instanceUuid });
+      }
 
       // Mirror the daemon's auth-success so the frontend proceeds to
       // stream/detail.
@@ -272,9 +281,11 @@ class TerminalBridgeImpl {
  */
 export function closeUserStreams(userUuid: string, instanceUuids?: string[]): number {
   let closed = 0;
-  for (const [socket, info] of Array.from(browserSockets)) {
-    if (info.userUuid !== userUuid) continue;
-    if (instanceUuids && !instanceUuids.includes(info.instanceUuid)) continue;
+  for (const [socket, grants] of Array.from(browserSockets)) {
+    const matched = grants.some(
+      (g) => g.userUuid === userUuid && (!instanceUuids || instanceUuids.includes(g.instanceUuid))
+    );
+    if (!matched) continue;
     // Close the transport, not socket.disconnect(): socket.io clients do not reconnect
     // after a server disconnect, so the web terminal would spin forever. After a
     // transport close it reconnects, fails stream/auth and shows its error.

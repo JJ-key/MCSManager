@@ -42,6 +42,24 @@ class UploadManager {
     return undefined;
   }
 
+  // Drop every writer a user started, or only those on the given instances, so no further
+  // piece is accepted. The writers are stopped in the background. Writers without a user
+  // tag are never touched. Returns how many were dropped.
+  revokeByUser(userUuid: string, instanceUuids?: string[]): number {
+    if (!userUuid) return 0;
+    let count = 0;
+    for (const [key, writer] of Array.from(this.uploads.entries())) {
+      if (writer.userUuid !== userUuid) continue;
+      if (instanceUuids && !instanceUuids.includes(writer.instanceUuid ?? "")) continue;
+      this.uploads.delete(key);
+      count++;
+      writer.stop().catch((e) => {
+        console.error(`Failed to stop upload writer for key ${key}:`, e);
+      });
+    }
+    return count;
+  }
+
   async clearExpired(): Promise<void> {
     const now = Date.now();
     for (const [key, writer] of this.uploads.entries()) {

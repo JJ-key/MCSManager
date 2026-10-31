@@ -120,7 +120,14 @@ function trackStream(socket: IStreamPeer["socket"], userUuid: string, instanceUu
     streamPeers.set(socket.id, peer);
     socket.on("disconnect", () => streamPeers.delete(socket.id));
   }
+  // The same pair can auth again and again on one socket: keep it once.
+  if (peer.grants.some((g) => g.userUuid === userUuid && g.instanceUuid === instanceUuid)) return;
   peer.grants.push({ userUuid, instanceUuid });
+}
+
+// How many grants a tracked socket holds (0 when it is not tracked).
+function streamGrantCount(socketId: string) {
+  return streamPeers.get(socketId)?.grants.length ?? 0;
 }
 
 // Close a socket's transport instead of calling socket.disconnect(): socket.io clients
@@ -158,5 +165,6 @@ export {
   LOGIN_FROM_STREAM,
   loginSuccessful,
   streamLoginSuccessful,
+  streamGrantCount,
   revokeUserAccess
 };

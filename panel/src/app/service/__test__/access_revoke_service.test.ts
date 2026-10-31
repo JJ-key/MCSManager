@@ -6,7 +6,8 @@ const h = vi.hoisted(() => ({
   services: new Map<string, any>(),
   request: vi.fn(),
   closeUserStreams: vi.fn(() => 2),
-  revokeUserTokens: vi.fn(() => 3)
+  revokeUserTokens: vi.fn(() => 3),
+  revokeUserUploads: vi.fn(() => 4)
 }));
 
 vi.mock("../remote_service", () => ({ default: { services: h.services } }));
@@ -20,6 +21,7 @@ vi.mock("../remote_command", () => ({
 }));
 vi.mock("../terminal_bridge", () => ({ closeUserStreams: h.closeUserStreams }));
 vi.mock("../gateway_token", () => ({ revokeUserTokens: h.revokeUserTokens }));
+vi.mock("../proxy_data_plane", () => ({ revokeUserUploads: h.revokeUserUploads }));
 vi.mock("../log", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }));
@@ -51,6 +53,7 @@ beforeEach(() => {
   h.request.mockResolvedValue({ sockets: 1, passports: 1 });
   h.closeUserStreams.mockClear();
   h.revokeUserTokens.mockClear();
+  h.revokeUserUploads.mockClear();
 });
 
 describe("computeAccessLoss", () => {
@@ -141,6 +144,7 @@ describe("revokeUserAccess", () => {
     await revokeUserAccess("user-a");
     expect(h.revokeUserTokens).toHaveBeenCalledWith("user-a", undefined);
     expect(h.closeUserStreams).toHaveBeenCalledWith("user-a", undefined);
+    expect(h.revokeUserUploads).toHaveBeenCalledWith("user-a", undefined);
     expect(h.request).toHaveBeenCalledTimes(2);
     expect(h.request).toHaveBeenCalledWith(
       "d1",
@@ -161,6 +165,7 @@ describe("revokeUserAccess", () => {
     await revokeUserAccess("user-a", { instanceUuids: ["i1", "i2"] });
     expect(h.revokeUserTokens).toHaveBeenCalledWith("user-a", ["i1", "i2"]);
     expect(h.closeUserStreams).toHaveBeenCalledWith("user-a", ["i1", "i2"]);
+    expect(h.revokeUserUploads).toHaveBeenCalledWith("user-a", ["i1", "i2"]);
     expect(h.request).toHaveBeenCalledWith(
       "d1",
       "passport/revoke_user",
@@ -176,6 +181,7 @@ describe("revokeUserAccess", () => {
     expect(h.request).not.toHaveBeenCalled();
     expect(h.closeUserStreams).not.toHaveBeenCalled();
     expect(h.revokeUserTokens).not.toHaveBeenCalled();
+    expect(h.revokeUserUploads).not.toHaveBeenCalled();
   });
 
   it("logs and carries on when a daemon is offline, times out or is too old", async () => {

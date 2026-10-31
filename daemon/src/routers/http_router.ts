@@ -180,7 +180,8 @@ router.post("/upload-new/:key", async (ctx) => {
     const overwrite = ctx.query.overwrite !== "false";
     const filePath = await FileWriter.getPath(cwd, uploadDir, filename, overwrite);
     let fr = uploadManager.getByPath(filePath);
-    if (fr && size != fr.writer.size) {
+    // A writer belongs to the user it was started for: never hand its id to someone else.
+    if (fr && (size != fr.writer.size || fr.writer.userUuid !== mission.userUuid)) {
       uploadManager.delete(fr.id);
       await fr.writer.stop();
       fr = undefined;
@@ -195,6 +196,8 @@ router.post("/upload-new/:key", async (ctx) => {
         filePath,
         deleteAfterUnzip
       );
+      fileWriter.userUuid = mission.userUuid;
+      fileWriter.instanceUuid = mission.parameter.instanceUuid;
       await fileWriter.init();
       const id = uploadManager.add(fileWriter);
       fr = { id, writer: fileWriter };

@@ -228,6 +228,53 @@ async function useLink(link) {
 
 const linkWorks = (r) => r.status === 200 && r.body === "hello";
 
+// Chunked upload, the way the web UI does it: an upload link, /upload-new for a writer id,
+// then /upload-piece/:id with the bytes at an offset.
+async function mintUploadLink(client, daemonId, instanceUuid) {
+  const r = await client.req("POST", "/files/upload", {
+    query: { daemonId, uuid: instanceUuid, upload_dir: "." }
+  });
+  return { ok: r.http === 200 && !!r.data?.password, http: r.http, link: r.data };
+}
+
+async function startUpload(link, filename, size) {
+  const base = /^https?:/.test(link.addr) ? link.addr : `http://${link.addr}`;
+  const url = `${base}/upload-new/${encodeURIComponent(link.password)}?filename=${filename}&size=${size}`;
+  const res = await fetch(url, { method: "POST" });
+  let id = null;
+  try {
+    id = JSON.parse(await res.text())?.data?.id ?? null;
+  } catch {
+    /* not JSON */
+  }
+  return { base, id };
+}
+
+async function sendPiece(upload, offset, text) {
+  const form = new FormData();
+  form.append("file", new Blob([text]), "piece");
+  const res = await fetch(`${upload.base}/upload-piece/${upload.id}?offset=${offset}`, {
+    method: "POST",
+    body: form
+  });
+  return { status: res.status, body: await res.text() };
+}
+
+// A piece was taken when the reply is a 200 that says so ("OK" direct, an envelope in proxy mode).
+const pieceTaken = (r) => r.status === 200 && /\bOK\b/.test(r.body);
+
+// First file called `name` anywhere under `dir`, or null.
+function findFile(dir, name) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      const found = findFile(full, name);
+      if (found) return found;
+    } else if (entry.name === name) return full;
+  }
+  return null;
+}
+
 // Raw daemon socket for the panel-key session and for the gate test.
 function rawDaemonSocket(daemonPort) {
   const s = { events: [], socket: null };
@@ -355,6 +402,7 @@ async function runMode(mode) {
     const uLower = await makeUser("u_lower", 10, []);
     const uRemove = await makeUser("u_remove", 1, [I1, I2]);
     const uReset = await makeUser("u_reset", 1, [I1, I2]);
+    const uUpload = await makeUser("u_upload", 1, [I1, I2]);
 
     // --- control user: streams on both instances, up for the whole run
     const cStream1 = trackStream(openStream((await mintStream(control.client, daemonId, I1)).info));
@@ -424,6 +472,35 @@ async function runMode(mode) {
       await controlStillUp("ban user");
     }
 
+    // --- 2b. a chunked upload in flight when the user is banned
+    {
+      const mine = await mintUploadLink(uUpload.client, daemonId, I1);
+      const upload = mine.ok ? await startUpload(mine.link, "late.bin", 6) : { id: null };
+      const theirs = await mintUploadLink(control.client, daemonId, I1);
+      const ctlUpload = theirs.ok ? await startUpload(theirs.link, "control.bin", 3) : { id: null };
+      check("upload: both users get a writer id", !!upload.id && !!ctlUpload.id);
+      check("upload: a piece is taken before the ban", pieceTaken(await sendPiece(upload, 0, "abc")));
+
+      const t0 = Date.now();
+      const put = await admin.req("PUT", "/auth", { body: { uuid: uUpload.uuid, config: { permission: -1 } } });
+      check("upload: ban request succeeds", put.http === 200, `got ${put.http}`);
+
+      // The writer is dropped at once, so the rest of the file is refused and never completed.
+      const late = await sendPiece(upload, 3, "def");
+      check(
+        "upload: a piece sent after the ban is refused",
+        late.status >= 400 && !pieceTaken(late),
+        `got ${late.status} ${late.body.slice(0, 80)}`
+      );
+      check("upload: ...within the deadline", Date.now() - t0 <= DEADLINE_MS + 1000, `${Date.now() - t0} ms`);
+      const removed = await waitFor(() => findFile(work, "late.bin") === null, DEADLINE_MS, 100);
+      check("upload: the half-written file is removed, not finished", removed, findFile(work, "late.bin") ?? "");
+      check("upload: control's upload still completes", pieceTaken(await sendPiece(ctlUpload, 0, "xyz")));
+      const done = findFile(work, "control.bin");
+      check("upload: ...and its file has every byte", !!done && fs.readFileSync(done, "utf8") === "xyz");
+      await controlStillUp("the upload ban");
+    }
+
     // --- 3. lower permission (admin -> normal user who keeps only instance two)
     {
       const armed1 = await arm(uLower, I1);
@@ -458,10 +535,25 @@ async function runMode(mode) {
     // --- 5. admin resets the password
     {
       const armed = await arm(uReset, I1);
+      // A browser that still holds the old cookie. It is copied now because the refused
+      // requests below clear the cookie on uReset.client.
+      const stale = new Client(panelUrl);
+      stale.cookies = new Map(uReset.client.cookies);
+      stale.token = uReset.client.token;
       const t0 = Date.now();
       const put = await admin.req("PUT", "/auth", { body: { uuid: uReset.uuid, config: { passWord: "ResetPass456" } } });
       check("reset password: admin request succeeds", put.http === 200, `got ${put.http}`);
       await expectCutOff("reset password", uReset, I1, armed, t0);
+      // Logging in with the new password on top of the old cookie must start a new session,
+      // not answer "Logined" and leave the stale one in place.
+      const relog = await stale.req("POST", "/auth/login", { body: { username: uReset.name, password: "ResetPass456" } });
+      check(
+        "reset password: the old cookie plus the new password starts a new session",
+        relog.http === 200 && typeof relog.data === "string" && relog.data !== "Logined",
+        JSON.stringify(relog.data)
+      );
+      if (typeof relog.data === "string") stale.token = relog.data;
+      check("reset password: ...and that session works", (await mintStream(stale, daemonId, I1)).ok);
       const old = await uReset.client.req("GET", "/auth/");
       check("reset password: the old session is refused", old.http === 403, `got ${old.http}`);
       const fresh = await new Client(panelUrl).login(uReset.name, "ResetPass456").catch(() => null);

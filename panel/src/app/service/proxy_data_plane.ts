@@ -37,6 +37,8 @@ interface UploadMapping {
   instanceUuid: string;
   uploadDir: string;
   daemonPass: string;
+  // Panel user the upload token was issued to (unset for tokens without one).
+  userUuid?: string;
 }
 
 // Maps a daemon upload writer id back to the daemon that owns it, so
@@ -52,6 +54,23 @@ function ensureUploadSweeper() {
     if (uploadIdMap.size > 500) uploadIdMap.clear();
   }, 5 * 60 * 1000);
   if (uploadSweepTimer && typeof uploadSweepTimer.unref === "function") uploadSweepTimer.unref();
+}
+
+/**
+ * Forget a user's chunked-upload writer ids, or only those on the given instances,
+ * so /upload-piece no longer forwards them. Entries without a user are never touched.
+ * Returns how many were dropped.
+ */
+export function revokeUserUploads(userUuid: string, instanceUuids?: string[]): number {
+  if (!userUuid) return 0;
+  let count = 0;
+  for (const [id, mapping] of Array.from(uploadIdMap)) {
+    if (mapping.userUuid !== userUuid) continue;
+    if (instanceUuids && !instanceUuids.includes(mapping.instanceUuid)) continue;
+    uploadIdMap.delete(id);
+    count++;
+  }
+  return count;
 }
 
 /** Strip the panel prefix from a path if one is configured. */
@@ -299,7 +318,8 @@ class ProxyDataPlaneImpl {
                 daemonId: binding.daemonId,
                 instanceUuid: binding.instanceUuid,
                 uploadDir: binding.target,
-                daemonPass
+                daemonPass,
+                userUuid: binding.userUuid
               });
             }
           } catch {

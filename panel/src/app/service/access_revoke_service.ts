@@ -1,6 +1,7 @@
 import { IUserApp, ROLE, User } from "../entity/user";
 import { revokeUserTokens } from "./gateway_token";
 import { logger } from "./log";
+import { revokeUserUploads } from "./proxy_data_plane";
 import RemoteRequest from "./remote_command";
 import RemoteServiceSubsystem from "./remote_service";
 import { closeUserStreams } from "./terminal_bridge";
@@ -56,8 +57,9 @@ export function computeAccessLoss(
 
 /**
  * Cut a user off: close their proxy-mode terminals, drop their unclaimed
- * gateway tokens, and tell every connected daemon to close their streams and
- * delete their passports. With instanceUuids, only those instances.
+ * gateway tokens and chunked-upload writer ids, and tell every connected daemon
+ * to close their streams, delete their passports and stop their upload writers.
+ * With instanceUuids, only those instances.
  *
  * The panel side runs immediately. A daemon that cannot be reached, or is too
  * old to know the route, is logged and skipped. This never rejects.
@@ -72,8 +74,10 @@ export async function revokeUserAccess(
   try {
     const tokens = revokeUserTokens(userUuid, instanceUuids);
     const bridges = closeUserStreams(userUuid, instanceUuids);
+    const uploads = revokeUserUploads(userUuid, instanceUuids);
     logger.info(
-      `Access revoked for user ${userUuid}: ${tokens} gateway tokens, ${bridges} terminal bridges` +
+      `Access revoked for user ${userUuid}: ${tokens} gateway tokens, ${bridges} terminal bridges, ` +
+        `${uploads} upload writers` +
         (instanceUuids ? `, instances ${instanceUuids.join(",")}` : "")
     );
   } catch (err: any) {
@@ -92,7 +96,7 @@ export async function revokeUserAccess(
           );
           logger.info(
             `Access revoke: daemon ${daemonId} closed ${result?.sockets} streams, ` +
-              `${result?.passports} passports`
+              `${result?.passports} passports, ${result?.uploads} uploads`
           );
         } catch (err: any) {
           logger.warn(

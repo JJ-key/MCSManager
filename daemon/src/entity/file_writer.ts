@@ -28,6 +28,10 @@ export default class FileWriter {
   private ownsFile = false;
   readonly received: ChunkRange[] = [];
   lastUpdate: number = Date.now();
+  // Panel user and instance the upload passport was issued for (unset when the passport
+  // carried no user). passport/revoke_user stops the writers that match.
+  userUuid?: string;
+  instanceUuid?: string;
 
   constructor(
     public readonly instance: Instance,

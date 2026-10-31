@@ -2,6 +2,7 @@ import { $t } from "../i18n";
 import { routerApp } from "../service/router_app";
 import { missionPassport, revokeUserAccess } from "../service/mission_passport";
 import * as protocol from "../service/protocol";
+import uploadManager from "../service/upload_manager";
 
 const ONE_HOUR_TIME = 3600000;
 const TASK_MAX_TIME = 1;
@@ -41,5 +42,8 @@ routerApp.on("passport/revoke_user", (ctx, data) => {
     if (!Array.isArray(data.instanceUuids)) throw new Error("instanceUuids must be an array");
     instanceUuids = data.instanceUuids.map(String);
   }
-  protocol.response(ctx, revokeUserAccess(userUuid, instanceUuids));
+  protocol.response(ctx, {
+    ...revokeUserAccess(userUuid, instanceUuids),
+    uploads: uploadManager.revokeByUser(userUuid, instanceUuids)
+  });
 });

@@ -51,8 +51,12 @@ router.put("/", permission({ level: ROLE.ADMIN }), async (ctx: Koa.Parameterized
     }
     // A password reset ends the user's sessions and cuts off their open streams.
     if (passWord) {
-      await userSystem.endSessions(uuid);
-      void revokeUserAccess(uuid);
+      try {
+        await userSystem.endSessions(uuid);
+      } finally {
+        // Cut the open streams even when the store write fails; the error still reaches the admin.
+        void revokeUserAccess(uuid);
+      }
     }
     const userAfter = snapshotUserConfig(uuid);
 

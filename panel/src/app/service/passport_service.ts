@@ -108,8 +108,12 @@ export async function confirm2FaQRCode(userUuid: string, isEnable: boolean) {
 
 export function check(ctx: Koa.ParameterizedContext) {
   if (!ctx.session) return false;
-  if (ctx.session["login"] && ctx.session["userName"] && ctx.session["token"]) return true;
-  return false;
+  if (!(ctx.session["login"] && ctx.session["userName"] && ctx.session["token"])) return false;
+  // A session of a deleted user, or one ended by a password reset, is not logged in.
+  // A missing counter on either side counts as 0, so existing sessions stay valid.
+  const user = ctx.session["uuid"] ? userSystem.getInstance(ctx.session["uuid"]) : undefined;
+  if (!user) return false;
+  return (ctx.session["sessionVersion"] ?? 0) === (user.sessionVersion ?? 0);
 }
 
 export function logout(ctx: Koa.ParameterizedContext): boolean {

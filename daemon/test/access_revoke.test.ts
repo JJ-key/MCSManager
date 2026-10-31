@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { globalConfiguration } from "../src/entity/config";
-import { missionPassport, revokeUserAccess } from "../src/service/mission_passport";
+import {
+  missionPassport,
+  revokeUserAccess,
+  streamGrantCount
+} from "../src/service/mission_passport";
 import { routerApp } from "../src/service/router_app";
 import { dispatch, flush, newContext, packetsFor } from "./harness/router";
 
@@ -159,6 +163,25 @@ describe("stream sockets", () => {
     expect(ctx.socket.conn.close).toHaveBeenCalled();
   });
 
+  it("keeps one grant when the same socket auths the same user and instance again", async () => {
+    register("a-pw", "stream_channel", "inst-1", "user-a");
+    register("a-pw-2", "stream_channel", "inst-2", "user-a");
+    const { ctx } = newContext("stream/auth", { session: {} });
+    for (let i = 0; i < 5; i++) routerApp.emitRouter("stream/auth", ctx, { password: "a-pw" });
+    await flush();
+    expect(streamGrantCount(ctx.socket.id)).toBe(1);
+
+    // A different instance is a new grant, and repeating it adds nothing.
+    routerApp.emitRouter("stream/auth", ctx, { password: "a-pw-2" });
+    routerApp.emitRouter("stream/auth", ctx, { password: "a-pw-2" });
+    await flush();
+    expect(streamGrantCount(ctx.socket.id)).toBe(2);
+
+    // The deduplicated socket is still found and closed.
+    expect(revokeUserAccess("user-a", ["inst-2"]).sockets).toBe(1);
+    expect(ctx.socket.conn.close).toHaveBeenCalled();
+  });
+
   it("forgets a socket once it disconnects", async () => {
     register("a-pw", "stream_channel", "inst-1", "user-a");
     const a = await authedStream("a-pw");
@@ -223,7 +246,7 @@ describe("passport/revoke_user gate", () => {
     await flush();
     const [res] = packetsFor(socket, "passport/revoke_user");
     expect(res.status).toBe(200);
-    expect(res.data).toEqual({ sockets: 1, passports: 2 });
+    expect(res.data).toEqual({ sockets: 1, passports: 2, uploads: 0 });
     expect(a.socket.conn.close).toHaveBeenCalled();
   });
 
