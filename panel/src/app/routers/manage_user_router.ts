@@ -4,6 +4,7 @@ import { ROLE } from "../entity/user";
 import { $t } from "../i18n";
 import permission from "../middleware/permission";
 import validator from "../middleware/validator";
+import { revokeUserAccess } from "../service/access_revoke_service";
 import { getOperationLoggerOperator, operationLogger } from "../service/operation_logger";
 import { register } from "../service/passport_service";
 import userSystem from "../service/user_service";
@@ -45,7 +46,13 @@ router.del("/", permission({ level: ROLE.ADMIN }), async (ctx: Koa.Parameterized
         },
         "warning"
       );
-      await userSystem.deleteInstance(iterator);
+      try {
+        await userSystem.deleteInstance(iterator);
+      } finally {
+        // Cut the user off even if removing the stored file failed: they are
+        // already gone from memory, so no new passport can be issued to them.
+        void revokeUserAccess(iterator);
+      }
     }
     ctx.body = true;
   } catch (error: any) {

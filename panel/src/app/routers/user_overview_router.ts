@@ -5,6 +5,11 @@ import { ICompleteUser } from "../entity/entity_interface";
 import { ROLE } from "../entity/user";
 import { $t } from "../i18n";
 import permission from "../middleware/permission";
+import {
+  revokeOnAccessChange,
+  revokeUserAccess,
+  snapshotAccess
+} from "../service/access_revoke_service";
 import { getOperationLoggerOperator, operationLogger } from "../service/operation_logger";
 import userSystem from "../service/user_service";
 
@@ -36,7 +41,19 @@ router.put("/", permission({ level: ROLE.ADMIN }), async (ctx: Koa.Parameterized
     };
 
     const userBefore = snapshotUserConfig(uuid);
-    await userSystem.edit(uuid, config);
+    const accessBefore = snapshotAccess(userSystem.getInstance(uuid));
+    try {
+      await userSystem.edit(uuid, config);
+    } finally {
+      // Compare even if the edit failed part-way: the in-memory user is what
+      // the HTTP permission check reads.
+      revokeOnAccessChange(uuid, accessBefore, snapshotAccess(userSystem.getInstance(uuid)));
+    }
+    // A password reset ends the user's sessions and cuts off their open streams.
+    if (passWord) {
+      await userSystem.endSessions(uuid);
+      void revokeUserAccess(uuid);
+    }
     const userAfter = snapshotUserConfig(uuid);
 
     const diff = diffConfig(userBefore, userAfter);

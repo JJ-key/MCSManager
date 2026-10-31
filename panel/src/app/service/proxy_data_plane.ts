@@ -212,7 +212,8 @@ class ProxyDataPlaneImpl {
     await new RemoteRequest(remoteService).request("passport/register", {
       name: "download",
       password: daemonPass,
-      parameter: { fileName: binding.target, instanceUuid: binding.instanceUuid }
+      parameter: { fileName: binding.target, instanceUuid: binding.instanceUuid },
+      userUuid: binding.userUuid
     });
 
     const base = daemonBase(remoteService);
@@ -271,7 +272,8 @@ class ProxyDataPlaneImpl {
     await new RemoteRequest(remoteService).request("passport/register", {
       name: "upload",
       password: daemonPass,
-      parameter: { uploadDir: binding.target, instanceUuid: binding.instanceUuid }
+      parameter: { uploadDir: binding.target, instanceUuid: binding.instanceUuid },
+      userUuid: binding.userUuid
     });
 
     ensureUploadSweeper();
@@ -361,7 +363,8 @@ class ProxyDataPlaneImpl {
     await new RemoteRequest(remoteService).request("passport/register", {
       name: "upload",
       password: daemonPass,
-      parameter: { uploadDir: binding.target, instanceUuid: binding.instanceUuid }
+      parameter: { uploadDir: binding.target, instanceUuid: binding.instanceUuid },
+      userUuid: binding.userUuid
     });
 
     const base = daemonBase(remoteService);

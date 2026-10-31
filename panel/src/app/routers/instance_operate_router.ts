@@ -245,6 +245,8 @@ router.post(
     try {
       const daemonId = String(ctx.query.daemonId);
       const instanceUuid = String(ctx.query.uuid);
+      // Tag the passport with the user so it can be revoked if their access is removed.
+      const userUuid = getUserUuid(ctx) || undefined;
       const remoteService = RemoteServiceSubsystem.getInstance(daemonId);
       if (!remoteService) throw new Error($t("TXT_CODE_dd559000") + ` Daemon ID: ${daemonId}`);
       if (systemConfig?.dataPlane === DataPlaneMode.Proxy) {
@@ -253,7 +255,8 @@ router.post(
           instanceUuid,
           op: "stream",
           target: instanceUuid,
-          ttlSec: 300
+          ttlSec: 300,
+          userUuid
         });
         ctx.body = {
           password: token,
@@ -272,7 +275,8 @@ router.post(
         password: password,
         parameter: {
           instanceUuid
-        }
+        },
+        userUuid
       });
       ctx.body = {
         password,

@@ -50,6 +50,11 @@ interface StreamClientEntry {
 // Map keyed by `${daemonId}::${instanceUuid}`.
 const streamClientMap = new Map<string, StreamClientEntry>();
 
+// Browser sockets that passed token verification, with the user and instance
+// their token was issued for. Set before the daemon client is attached, so a
+// revoke that lands mid-attach still finds the socket.
+const browserSockets = new Map<ServerSocket, { userUuid?: string; instanceUuid: string }>();
+
 // Daemon-side events that must be fanned out to all browser subscribers.
 const DAEMON_FORWARD_EVENTS = [
   "instance/stdout",
@@ -86,6 +91,12 @@ class TerminalBridgeImpl {
         socket.disconnect();
         return;
       }
+
+      browserSockets.set(socket, {
+        userUuid: binding.userUuid,
+        instanceUuid: binding.instanceUuid
+      });
+      socket.on("disconnect", () => browserSockets.delete(socket));
 
       // Mirror the daemon's auth-success so the frontend proceeds to
       // stream/detail.
@@ -202,6 +213,17 @@ class TerminalBridgeImpl {
       );
     }
 
+    // The browser socket was closed (for example its access was revoked) while
+    // the daemon client was being set up: do not subscribe it.
+    if (!socket.connected) {
+      if (entry!.ref <= 0) {
+        entry!.streamClient.removeAllListeners();
+        entry!.streamClient.disconnect();
+        streamClientMap.delete(mapKey);
+      }
+      return;
+    }
+
     // Register this browser socket as a subscriber.
     entry!.subscribers.add(socket);
     entry!.ref++;
@@ -241,6 +263,29 @@ class TerminalBridgeImpl {
       }
     });
   }
+}
+
+/**
+ * Disconnect a user's browser sockets, or only those on the given instances.
+ * Each socket's disconnect handler releases the daemon stream client when it
+ * was the last subscriber. Returns how many sockets were closed.
+ */
+export function closeUserStreams(userUuid: string, instanceUuids?: string[]): number {
+  let closed = 0;
+  for (const [socket, info] of Array.from(browserSockets)) {
+    if (info.userUuid !== userUuid) continue;
+    if (instanceUuids && !instanceUuids.includes(info.instanceUuid)) continue;
+    // Close the transport, not socket.disconnect(): socket.io clients do not reconnect
+    // after a server disconnect, so the web terminal would spin forever. After a
+    // transport close it reconnects, fails stream/auth and shows its error.
+    try {
+      socket.conn.close();
+    } catch {
+      socket.disconnect(true);
+    }
+    closed++;
+  }
+  return closed;
 }
 
 const TerminalBridge = new TerminalBridgeImpl();

@@ -33,6 +33,7 @@ interface ProxyPayload {
   instanceUuid: string;
   op: ProxyOp;
   target: string;
+  userUuid?: string;
   nonce: string;
   exp: number;
 }
@@ -42,11 +43,14 @@ export interface ProxyBinding {
   instanceUuid: string;
   op: ProxyOp;
   target: string;
+  userUuid?: string;
 }
 
 interface NonceEntry {
   exp: number;
   claimed: boolean;
+  userUuid?: string;
+  instanceUuid: string;
 }
 
 // In-module singleton nonce store: nonce → entry.
@@ -94,6 +98,7 @@ export function issueProxyToken(params: {
   instanceUuid: string;
   op: ProxyOp;
   target: string;
+  userUuid?: string;
   ttlSec?: number;
 }): string {
   const defaultTtl = params.op === "stream" ? STREAM_TTL_SEC : DOWNLOAD_TTL_SEC;
@@ -106,6 +111,7 @@ export function issueProxyToken(params: {
     instanceUuid: params.instanceUuid,
     op: params.op,
     target: params.target,
+    userUuid: params.userUuid,
     nonce,
     exp
   };
@@ -116,7 +122,12 @@ export function issueProxyToken(params: {
   const token = Buffer.from(payloadJson).toString("base64url") + "." + sig.toString("base64url");
 
   ensureSweeper();
-  nonceStore.set(nonce, { exp, claimed: false });
+  nonceStore.set(nonce, {
+    exp,
+    claimed: false,
+    userUuid: params.userUuid,
+    instanceUuid: params.instanceUuid
+  });
   return token;
 }
 
@@ -164,7 +175,8 @@ export function verifyProxyToken(token: string, expectedOp: ProxyOp): ProxyBindi
         daemonId: payload.daemonId,
         instanceUuid: payload.instanceUuid,
         op: payload.op,
-        target: payload.target
+        target: payload.target,
+        userUuid: payload.userUuid
       };
     }
 
@@ -174,7 +186,8 @@ export function verifyProxyToken(token: string, expectedOp: ProxyOp): ProxyBindi
       daemonId: payload.daemonId,
       instanceUuid: payload.instanceUuid,
       op: payload.op,
-      target: payload.target
+      target: payload.target,
+      userUuid: payload.userUuid
     };
   } catch (err) {
     logger.warn("verifyProxyToken failed:", (err as Error)?.message ?? err);
@@ -200,4 +213,19 @@ export function revokeStreamNonce(token: string): void {
   }
 }
 
-export default { issueProxyToken, verifyProxyToken, revokeStreamNonce };
+/**
+ * Drop every token issued to a user (claimed or not), or only those for the
+ * given instances. Returns how many were dropped.
+ */
+export function revokeUserTokens(userUuid: string, instanceUuids?: string[]): number {
+  let count = 0;
+  for (const [nonce, entry] of nonceStore) {
+    if (entry.userUuid !== userUuid) continue;
+    if (instanceUuids && !instanceUuids.includes(entry.instanceUuid)) continue;
+    nonceStore.delete(nonce);
+    count++;
+  }
+  return count;
+}
+
+export default { issueProxyToken, verifyProxyToken, revokeStreamNonce, revokeUserTokens };

@@ -28,6 +28,7 @@ export interface IUser {
   open2FA?: boolean;
   ssoSub?: string;
   ssoBound?: boolean;
+  sessionVersion?: number;
 }
 
 export interface ICompleteUser {

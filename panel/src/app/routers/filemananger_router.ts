@@ -482,6 +482,8 @@ router.all(
       const daemonId = String(ctx.query.daemonId);
       const instanceUuid = String(ctx.query.uuid);
       const fileName = String(ctx.query.file_name);
+      // Tag the passport with the user so it can be revoked if their access is removed.
+      const userUuid = getUserUuid(ctx) || undefined;
       const remoteService = RemoteServiceSubsystem.getInstance(daemonId);
       if (!remoteService) throw new Error($t("TXT_CODE_dd559000") + ` Daemon ID: ${daemonId}`);
       operationLogger.log("instance_file_download", {
@@ -497,7 +499,8 @@ router.all(
           instanceUuid,
           op: "download",
           target: fileName,
-          ttlSec: 120
+          ttlSec: 120,
+          userUuid
         });
         ctx.body = {
           password: token,
@@ -515,7 +518,8 @@ router.all(
         parameter: {
           fileName,
           instanceUuid
-        }
+        },
+        userUuid
       });
       ctx.body = {
         password,
@@ -537,6 +541,8 @@ router.all(
       const daemonId = String(ctx.query.daemonId);
       const instanceUuid = String(ctx.query.uuid);
       const uploadDir = String(ctx.query.upload_dir);
+      // Tag the passport with the user so it can be revoked if their access is removed.
+      const userUuid = getUserUuid(ctx) || undefined;
       const remoteService = RemoteServiceSubsystem.getInstance(daemonId);
       if (!remoteService) throw new Error($t("TXT_CODE_dd559000") + ` Daemon ID: ${daemonId}`);
       operationLogger.log("instance_file_upload", {
@@ -551,7 +557,8 @@ router.all(
           instanceUuid,
           op: "upload",
           target: uploadDir,
-          ttlSec: 120
+          ttlSec: 120,
+          userUuid
         });
         ctx.body = {
           password: token,
@@ -569,7 +576,8 @@ router.all(
         parameter: {
           uploadDir,
           instanceUuid
-        }
+        },
+        userUuid
       });
       ctx.body = {
         password,

@@ -101,7 +101,8 @@ router.post(
           instanceUuid: newInstanceUuid,
           op: "upload",
           target: ".",
-          ttlSec: 120
+          ttlSec: 120,
+          userUuid: getUserUuid(ctx) || undefined
         });
         ctx.body = {
           instanceUuid: newInstanceUuid,
@@ -121,7 +122,8 @@ router.post(
         parameter: {
           uploadDir: ".",
           instanceUuid: newInstanceUuid
-        }
+        },
+        userUuid: getUserUuid(ctx) || undefined
       });
       ctx.body = {
         instanceUuid: newInstanceUuid,

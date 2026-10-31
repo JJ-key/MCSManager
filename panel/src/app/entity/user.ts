@@ -27,6 +27,8 @@ export class User implements IUser {
   open2FA = false;
   ssoSub = "";
   ssoBound = false;
+  // Bumped when an admin resets the password; sessions that carry an older value end.
+  sessionVersion = 0;
 }
 
 export enum ROLE {

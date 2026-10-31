@@ -129,6 +129,13 @@ export default (parameter: IPermissionCfg) => {
           return logout(ctx);
         }
 
+        // An admin password reset bumps sessionVersion; older sessions end here.
+        // Sessions and users without the field count as version 0.
+        if (user && (ctx.session["sessionVersion"] ?? 0) !== (user.sessionVersion ?? 0)) {
+          logout(ctx);
+          return verificationFailed(ctx);
+        }
+
         // Judgment of permissions for ordinary users and administrative users
         if (user && user.permission >= Number(parameter.level)) {
           return await next();

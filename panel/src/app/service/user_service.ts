@@ -207,6 +207,14 @@ class UserSubsystem {
     }
   }
 
+  // End every login session of a user: sessions that carry an older sessionVersion are rejected.
+  async endSessions(uuid: string) {
+    const user = this.getInstance(uuid);
+    if (!user) return;
+    user.sessionVersion = (user.sessionVersion ?? 0) + 1;
+    await Storage.getStorage().store("User", uuid, user);
+  }
+
   getUserBySsoSub(ssoSub: string): User | null {
     for (const [, user] of this.objects) {
       if (user.ssoSub && user.ssoSub === ssoSub) return user;
