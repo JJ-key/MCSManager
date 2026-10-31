@@ -9,6 +9,7 @@ export interface FakeSocket {
   emit: ReturnType<typeof vi.fn>;
   disconnect: ReturnType<typeof vi.fn>;
   use: ReturnType<typeof vi.fn>;
+  conn: { close: ReturnType<typeof vi.fn> };
 }
 
 let idSeq = 0;
@@ -21,7 +22,8 @@ export function fakeSocket(address = "127.0.0.1"): FakeSocket {
     on: vi.fn(),
     emit: vi.fn(),
     disconnect: vi.fn(),
-    use: vi.fn()
+    use: vi.fn(),
+    conn: { close: vi.fn() }
   };
 }
 

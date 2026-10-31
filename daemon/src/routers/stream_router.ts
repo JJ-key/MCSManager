@@ -42,7 +42,7 @@ routerApp.on("stream/auth", (ctx, data) => {
     const instance = InstanceSubsystem.getInstance(mission.parameter.instanceUuid);
     if (!instance) throw new Error($t("TXT_CODE_stream_router.instanceNotExist"));
     // Auth success!
-    streamLoginSuccessful(ctx, instance.instanceUuid);
+    streamLoginSuccessful(ctx, instance.instanceUuid, mission.userUuid);
     // Start forwarding output stream data to this Socket
     InstanceSubsystem.forward(instance.instanceUuid, ctx.socket);
     // Cancel forwarding events when registration is disconnected
