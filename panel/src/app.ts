@@ -31,6 +31,10 @@ import {
 } from "./app/utils/integration_test_mode";
 import { checkBusinessMode, getVersion, initVersionManager } from "./app/version";
 
+// Started with --expose-gc, this gives memory back while idle. V8 otherwise keeps it until the next allocation pressure.
+const collectGarbage = (globalThis as { gc?: () => void }).gc;
+if (collectGarbage) setInterval(collectGarbage, 5 * 60 * 1000).unref();
+
 function hasParams(name: string) {
   return process.argv.includes(name);
 }
